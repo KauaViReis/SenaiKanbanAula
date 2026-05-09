@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogOut, ArrowLeft, Image as ImageIcon } from 'lucide-react';
+import API_URL from '../config';
 
 export default function Profile({ setAuth }) {
   const navigate = useNavigate();
@@ -30,7 +31,7 @@ export default function Profile({ setAuth }) {
   const handleUpdateAvatar = async (url) => {
     setIsSaving(true);
     try {
-      const res = await fetch('http://localhost:5000/api/auth/profile', {
+      const res = await fetch(`${API_URL}/api/auth/profile`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, Search, Calendar, Tag, Edit2, Trash2, Archive, ArchiveRestore, CheckSquare, Columns, List } from 'lucide-react';
 import TaskModal from '../components/TaskModal';
+import API_URL from '../config';
 
 export default function Tasks() {
   const [tasks, setTasks] = useState([]);
@@ -18,7 +19,7 @@ export default function Tasks() {
 
   const fetchTasks = async () => {
     try {
-      let url = `http://localhost:5000/api/tasks?search=${search}&is_archived=${viewArchived ? '1' : '0'}`;
+      let url = `${API_URL}/api/tasks?search=${search}&is_archived=${viewArchived ? '1' : '0'}`;
       if (filterPriority) url += `&priority=${filterPriority}`;
       if (filterTag) url += `&tag=${filterTag}`;
 
@@ -55,14 +56,14 @@ export default function Tasks() {
   const handleDeleteTask = async (id) => {
     if (!window.confirm('Tem certeza que deseja excluir esta tarefa permanentemente?')) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/tasks/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
+      const res = await fetch(`${API_URL}/api/tasks/${id}`, { method: 'DELETE', headers: { Authorization: `Bearer ${token}` } });
       if (res.ok) fetchTasks();
     } catch (err) { console.error('Erro ao excluir tarefa', err); }
   };
 
   const toggleArchiveStatus = async (task) => {
     try {
-      const res = await fetch(`http://localhost:5000/api/tasks/${task.id}`, {
+      const res = await fetch(`${API_URL}/api/tasks/${task.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ is_archived: task.is_archived ? 0 : 1 })
@@ -74,7 +75,7 @@ export default function Tasks() {
   const toggleTaskStatus = async (task, forcedStatus = null) => {
     const newStatus = forcedStatus || (task.status === 'completed' ? 'pending' : 'completed');
     try {
-      const res = await fetch(`http://localhost:5000/api/tasks/${task.id}`, {
+      const res = await fetch(`${API_URL}/api/tasks/${task.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status: newStatus })

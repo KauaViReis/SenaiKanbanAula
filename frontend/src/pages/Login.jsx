@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import API_URL from '../config';
 
 export default function Login({ setAuth }) {
   const [isLogin, setIsLogin] = useState(true);
@@ -18,7 +19,7 @@ export default function Login({ setAuth }) {
     try {
       const bodyData = isLogin ? { email, password } : { name, email, password };
       
-      const response = await fetch(`http://localhost:5000${endpoint}`, {
+      const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(bodyData),

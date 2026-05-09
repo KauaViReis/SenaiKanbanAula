@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, CheckCircle2 } from 'lucide-react';
+import API_URL from '../config';
 
 export default function TaskModal({ isOpen, onClose, editingTaskId, initialData }) {
   const getTodayDate = () => new Date().toISOString().split('T')[0];
@@ -26,7 +27,7 @@ export default function TaskModal({ isOpen, onClose, editingTaskId, initialData 
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/categories', { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
+      const res = await fetch(`${API_URL}/api/categories`, { headers: { Authorization: `Bearer ${localStorage.getItem('token')}` } });
       if (res.ok) setCategories(await res.json());
     } catch (err) { console.error(err); }
   };
@@ -34,7 +35,7 @@ export default function TaskModal({ isOpen, onClose, editingTaskId, initialData 
   const handleCreateCategory = async () => {
     if (!newCategoryName.trim()) return;
     try {
-      const res = await fetch('http://localhost:5000/api/categories', {
+      const res = await fetch(`${API_URL}/api/categories`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('token')}` },
         body: JSON.stringify({ name: newCategoryName })
@@ -64,7 +65,7 @@ export default function TaskModal({ isOpen, onClose, editingTaskId, initialData 
       const method = editingTaskId ? 'PUT' : 'POST';
       const endpoint = editingTaskId ? `/api/tasks/${editingTaskId}` : '/api/tasks';
       
-      const res = await fetch(`http://localhost:5000${endpoint}`, {
+      const res = await fetch(`${API_URL}${endpoint}`, {
         method,
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ ...task, tags: tagsArray })

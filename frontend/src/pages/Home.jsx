@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { LayoutDashboard, CheckCircle2, AlertCircle, Calendar, Tag, ChevronRight } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { Link } from 'react-router-dom';
+import API_URL from '../config';
 
 export default function Home() {
   const [stats, setStats] = useState({ total: 0, completedToday: 0, overdue: 0 });
@@ -20,13 +21,13 @@ export default function Home() {
     const fetchData = async () => {
       try {
         // Fetch Dashboard Stats
-        const resStats = await fetch('http://localhost:5000/api/tasks/dashboard/stats', {
+        const resStats = await fetch(`${API_URL}/api/tasks/dashboard/stats`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (resStats.ok) setStats(await resStats.json());
 
         // Fetch Weekly Stats
-        const resWeekly = await fetch('http://localhost:5000/api/tasks/weekly-stats', {
+        const resWeekly = await fetch(`${API_URL}/api/tasks/weekly-stats`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (resWeekly.ok) {
@@ -45,7 +46,7 @@ export default function Home() {
         }
 
         // Fetch Upcoming Tasks (Limit to 5)
-        const resTasks = await fetch('http://localhost:5000/api/tasks?is_archived=0', {
+        const resTasks = await fetch(`${API_URL}/api/tasks?is_archived=0`, {
           headers: { Authorization: `Bearer ${token}` }
         });
         if (resTasks.ok) {

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { FolderOpen, Plus, Trash2, Tag } from 'lucide-react';
+import API_URL from '../config';
 
 export default function Categories() {
   const [categories, setCategories] = useState([]);
@@ -10,7 +11,7 @@ export default function Categories() {
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/categories', {
+      const res = await fetch(`${API_URL}/api/categories`, {
         headers: { Authorization: `Bearer ${token}` }
       });
       if (res.ok) setCategories(await res.json());
@@ -28,7 +29,7 @@ export default function Categories() {
     if (!newCategoryName.trim()) return;
 
     try {
-      const res = await fetch('http://localhost:5000/api/categories', {
+      const res = await fetch(`${API_URL}/api/categories`, {
         method: 'POST',
         headers: { 
           'Content-Type': 'application/json',
@@ -50,7 +51,7 @@ export default function Categories() {
   const handleDeleteCategory = async (id) => {
     if (!window.confirm('Tem certeza? Tarefas com essa categoria ficarão sem categoria.')) return;
     try {
-      const res = await fetch(`http://localhost:5000/api/categories/${id}`, {
+      const res = await fetch(`${API_URL}/api/categories/${id}`, {
         method: 'DELETE',
         headers: { Authorization: `Bearer ${token}` }
       });
