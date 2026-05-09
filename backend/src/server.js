@@ -24,3 +24,5 @@ app.get('/api/health', (req, res) => {
 app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
 });
+
+export default app;

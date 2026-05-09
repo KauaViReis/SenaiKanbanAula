@@ -1,83 +1,43 @@
-import db from '../db/index.js';
+import { db } from '../config/firebaseAdmin.js';
 
-export const getTasks = (req, res) => {
-    const userId = req.user.id;
-    const { status, priority, page = 1, limit = 20, search, is_archived = '0', tag } = req.query;
-    const offset = (page - 1) * limit;
+export const getTasks = async (req, res) => {
+    const userId = req.user.id.toString();
+    const { status, priority, is_archived = '0', tag, search } = req.query;
 
     try {
-        let query = 'SELECT DISTINCT tasks.* FROM tasks ';
-        if (tag) {
-            query += ' JOIN task_tags tt ON tasks.id = tt.task_id JOIN tags t ON tt.tag_id = t.id ';
-        }
-        
-        query += ' WHERE tasks.user_id = ? AND tasks.is_archived = ? ';
-        const params = [userId, parseInt(is_archived)];
+        let tasksRef = db.collection('tasks')
+            .where('user_id', '==', userId)
+            .where('is_archived', '==', is_archived === '1');
 
         if (status) {
-            query += ' AND tasks.status = ?';
-            params.push(status);
+            tasksRef = tasksRef.where('status', '==', status);
         }
         if (priority) {
-            query += ' AND tasks.priority = ?';
-            params.push(priority);
+            tasksRef = tasksRef.where('priority', '==', priority);
+        }
+
+        const snapshot = await tasksRef.orderBy('created_at', 'desc').get();
+        let tasks = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+        // Filtros manuais (Firestore tem limitações com OR e LIKE)
+        if (tag) {
+            tasks = tasks.filter(t => t.tags && t.tags.includes(tag.toLowerCase()));
         }
         if (search) {
-            query += ' AND (tasks.title LIKE ? OR tasks.description LIKE ?)';
-            params.push(`%${search}%`, `%${search}%`);
+            const searchLower = search.toLowerCase();
+            tasks = tasks.filter(t => 
+                (t.title && t.title.toLowerCase().includes(searchLower)) || 
+                (t.description && t.description.toLowerCase().includes(searchLower))
+            );
         }
-        if (tag) {
-            query += ' AND t.name = ?';
-            params.push(tag.toLowerCase());
-        }
-
-        query += ' ORDER BY tasks.created_at DESC LIMIT ? OFFSET ?';
-        params.push(parseInt(limit), parseInt(offset));
-
-        const stmt = db.prepare(query);
-        const tasks = stmt.all(...params);
-
-        // Fetch tags for each task
-        const getTagsStmt = db.prepare(`
-            SELECT t.name FROM tags t
-            JOIN task_tags tt ON t.id = tt.tag_id
-            WHERE tt.task_id = ?
-        `);
-
-        const tasksWithTags = tasks.map(task => {
-            const tags = getTagsStmt.all(task.id).map(t => t.name);
-            const subtasks = db.prepare('SELECT * FROM subtasks WHERE task_id = ? ORDER BY id ASC').all(task.id);
-            return { ...task, tags, subtasks };
-        });
-
-        // Get total count for pagination
-        let countQuery = 'SELECT COUNT(DISTINCT tasks.id) as total FROM tasks ';
-        if (tag) {
-            countQuery += ' JOIN task_tags tt ON tasks.id = tt.task_id JOIN tags t ON tt.tag_id = t.id ';
-        }
-        countQuery += ' WHERE tasks.user_id = ? AND tasks.is_archived = ? ';
-        
-        const countParams = [userId, parseInt(is_archived)];
-        if (status) { countQuery += ' AND tasks.status = ?'; countParams.push(status); }
-        if (priority) { countQuery += ' AND tasks.priority = ?'; countParams.push(priority); }
-        if (search) {
-            countQuery += ' AND (tasks.title LIKE ? OR tasks.description LIKE ?)';
-            countParams.push(`%${search}%`, `%${search}%`);
-        }
-        if (tag) {
-            countQuery += ' AND t.name = ?';
-            countParams.push(tag.toLowerCase());
-        }
-        
-        const total = db.prepare(countQuery).get(...countParams).total;
 
         res.status(200).json({
-            tasks: tasksWithTags,
+            tasks: tasks,
             pagination: {
-                total,
-                page: parseInt(page),
-                limit: parseInt(limit),
-                totalPages: Math.ceil(total / limit)
+                total: tasks.length,
+                page: 1,
+                limit: tasks.length,
+                totalPages: 1
             }
         });
     } catch (error) {
@@ -85,144 +45,78 @@ export const getTasks = (req, res) => {
     }
 };
 
-const handleTags = (taskId, tags) => {
-    if (!tags) return;
-    
-    // Remove existing tags
-    db.prepare('DELETE FROM task_tags WHERE task_id = ?').run(taskId);
-
-    if (tags.length > 0) {
-        const getTagStmt = db.prepare('SELECT id FROM tags WHERE name = ?');
-        const insertTagStmt = db.prepare('INSERT INTO tags (name) VALUES (?)');
-        const linkTagStmt = db.prepare('INSERT INTO task_tags (task_id, tag_id) VALUES (?, ?)');
-
-        for (const tagName of tags) {
-            const cleanTag = tagName.trim().toLowerCase();
-            if (!cleanTag) continue;
-
-            let tagId;
-            const existingTag = getTagStmt.get(cleanTag);
-            
-            if (existingTag) {
-                tagId = existingTag.id;
-            } else {
-                const newTag = insertTagStmt.run(cleanTag);
-                tagId = newTag.lastInsertRowid;
-            }
-            
-            try {
-                linkTagStmt.run(taskId, tagId);
-            } catch (e) {
-                if (e.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') throw e;
-            }
-        }
-    }
-};
-
-const handleSubtasks = (taskId, subtasks) => {
-    if (!subtasks) return;
-    
-    const existingIds = subtasks.filter(s => s.id).map(s => s.id);
-    if (existingIds.length > 0) {
-        const placeholders = existingIds.map(() => '?').join(',');
-        db.prepare(`DELETE FROM subtasks WHERE task_id = ? AND id NOT IN (${placeholders})`).run(taskId, ...existingIds);
-    } else {
-        db.prepare('DELETE FROM subtasks WHERE task_id = ?').run(taskId);
-    }
-    
-    const insertStmt = db.prepare('INSERT INTO subtasks (task_id, title, is_completed) VALUES (?, ?, ?)');
-    const updateStmt = db.prepare('UPDATE subtasks SET title = ?, is_completed = ? WHERE id = ? AND task_id = ?');
-    
-    for (const st of subtasks) {
-        if (st.id) {
-            updateStmt.run(st.title, st.is_completed ? 1 : 0, st.id, taskId);
-        } else {
-            if (st.title && st.title.trim()) {
-                insertStmt.run(taskId, st.title.trim(), st.is_completed ? 1 : 0);
-            }
-        }
-    }
-};
-
-export const createTask = (req, res) => {
-    const userId = req.user.id;
-    const { title, description, due_date, priority, category_id, tags = [] } = req.body;
+export const createTask = async (req, res) => {
+    const userId = req.user.id.toString();
+    const { title, description, due_date, priority, category_id, tags = [], subtasks = [] } = req.body;
 
     if (!title) {
         return res.status(400).json({ error: 'O título é obrigatório' });
     }
 
     try {
-        const createTaskTransaction = db.transaction(() => {
-            const stmt = db.prepare(`
-                INSERT INTO tasks (user_id, category_id, title, description, due_date, priority)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `);
-            const result = stmt.run(userId, category_id || null, title, description || '', due_date || null, priority || 'medium');
-            const taskId = result.lastInsertRowid;
+        const newTask = {
+            user_id: userId,
+            category_id: category_id ? category_id.toString() : null,
+            title,
+            description: description || '',
+            due_date: due_date || null,
+            priority: priority || 'medium',
+            status: 'pending',
+            is_archived: false,
+            tags: tags.map(t => t.trim().toLowerCase()),
+            subtasks: subtasks.map(s => ({
+                title: s.title.trim(),
+                is_completed: !!s.is_completed
+            })),
+            created_at: new Date().toISOString()
+        };
 
-            handleTags(taskId, tags);
-            if (req.body.subtasks) {
-                handleSubtasks(taskId, req.body.subtasks);
-            }
-
-            return taskId;
-        });
-
-        const newTaskId = createTaskTransaction();
+        const docRef = await db.collection('tasks').add(newTask);
 
         res.status(201).json({ 
             message: 'Tarefa criada com sucesso',
-            taskId: newTaskId 
+            taskId: docRef.id 
         });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao criar tarefa', details: error.message });
     }
 };
 
-export const updateTask = (req, res) => {
-    const userId = req.user.id;
+export const updateTask = async (req, res) => {
+    const userId = req.user.id.toString();
     const taskId = req.params.id;
-    const { title, description, due_date, priority, status, category_id, is_archived, tags } = req.body;
+    const updates = req.body;
 
     try {
-        const checkStmt = db.prepare('SELECT id FROM tasks WHERE id = ? AND user_id = ?');
-        const taskExists = checkStmt.get(taskId, userId);
-        
-        if (!taskExists) {
+        const taskRef = db.collection('tasks').doc(taskId);
+        const doc = await taskRef.get();
+
+        if (!doc.exists || doc.data().user_id !== userId) {
             return res.status(404).json({ error: 'Tarefa não encontrada' });
         }
 
-        const updateTransaction = db.transaction(() => {
-            const updates = [];
-            const values = [];
-
-            if (title !== undefined) { updates.push('title = ?'); values.push(title); }
-            if (description !== undefined) { updates.push('description = ?'); values.push(description); }
-            if (due_date !== undefined) { updates.push('due_date = ?'); values.push(due_date); }
-            if (priority !== undefined) { updates.push('priority = ?'); values.push(priority); }
-            if (status !== undefined) { updates.push('status = ?'); values.push(status); }
-            if (category_id !== undefined) { 
-                updates.push('category_id = ?'); 
-                values.push(category_id === '' ? null : category_id); 
-            }
-            if (is_archived !== undefined) { updates.push('is_archived = ?'); values.push(is_archived); }
-
-            if (updates.length > 0) {
-                values.push(taskId, userId);
-                const stmt = db.prepare(`UPDATE tasks SET ${updates.join(', ')} WHERE id = ? AND user_id = ?`);
-                stmt.run(...values);
-            }
-
-            if (tags !== undefined) {
-                handleTags(taskId, tags);
-            }
-            if (req.body.subtasks !== undefined) {
-                handleSubtasks(taskId, req.body.subtasks);
+        // Limpeza de campos e formatação
+        const dataToUpdate = {};
+        const fields = ['title', 'description', 'due_date', 'priority', 'status', 'category_id', 'is_archived', 'tags', 'subtasks'];
+        
+        fields.forEach(field => {
+            if (updates[field] !== undefined) {
+                if (field === 'tags' && Array.isArray(updates.tags)) {
+                    dataToUpdate[field] = updates.tags.map(t => t.trim().toLowerCase());
+                } else if (field === 'subtasks' && Array.isArray(updates.subtasks)) {
+                    dataToUpdate[field] = updates.subtasks.map(s => ({
+                        title: s.title.trim(),
+                        is_completed: !!s.is_completed
+                    }));
+                } else if (field === 'category_id') {
+                    dataToUpdate[field] = updates[field] ? updates[field].toString() : null;
+                } else {
+                    dataToUpdate[field] = updates[field];
+                }
             }
         });
 
-        updateTransaction();
+        await taskRef.update(dataToUpdate);
 
         res.status(200).json({ message: 'Tarefa atualizada com sucesso' });
     } catch (error) {
@@ -230,48 +124,42 @@ export const updateTask = (req, res) => {
     }
 };
 
-export const deleteTask = (req, res) => {
-    const userId = req.user.id;
+export const deleteTask = async (req, res) => {
+    const userId = req.user.id.toString();
     const taskId = req.params.id;
 
     try {
-        const stmt = db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?');
-        const result = stmt.run(taskId, userId);
+        const taskRef = db.collection('tasks').doc(taskId);
+        const doc = await taskRef.get();
 
-        if (result.changes === 0) {
+        if (!doc.exists || doc.data().user_id !== userId) {
             return res.status(404).json({ error: 'Tarefa não encontrada' });
         }
 
+        await taskRef.delete();
         res.status(200).json({ message: 'Tarefa excluída com sucesso' });
     } catch (error) {
         res.status(500).json({ error: 'Erro ao excluir tarefa', details: error.message });
     }
 };
 
-export const getDashboardStats = (req, res) => {
-    const userId = req.user.id;
+export const getDashboardStats = async (req, res) => {
+    const userId = req.user.id.toString();
     const todayStr = new Date().toISOString().split('T')[0];
 
     try {
-        // Only count active tasks for dashboard stats
-        const totalStmt = db.prepare('SELECT COUNT(*) as total FROM tasks WHERE user_id = ? AND is_archived = 0');
-        const total = totalStmt.get(userId).total;
+        const tasksRef = db.collection('tasks').where('user_id', '==', userId).where('is_archived', '==', false);
+        const snapshot = await tasksRef.get();
+        const tasks = snapshot.docs.map(doc => doc.data());
 
-        const completedTodayStmt = db.prepare(`
-            SELECT COUNT(*) as completed_today 
-            FROM tasks 
-            WHERE user_id = ? AND status = 'completed' AND is_archived = 0
-            AND date(due_date) = ?
-        `);
-        const completedToday = completedTodayStmt.get(userId, todayStr).completed_today || 0;
+        const total = tasks.length;
+        const completedToday = tasks.filter(t => 
+            t.status === 'completed' && t.due_date && t.due_date.startsWith(todayStr)
+        ).length;
 
-        const overdueStmt = db.prepare(`
-            SELECT COUNT(*) as overdue 
-            FROM tasks 
-            WHERE user_id = ? AND status = 'pending' AND is_archived = 0
-            AND date(due_date) < ? AND due_date IS NOT NULL
-        `);
-        const overdue = overdueStmt.get(userId, todayStr).overdue;
+        const overdue = tasks.filter(t => 
+            t.status === 'pending' && t.due_date && t.due_date < todayStr
+        ).length;
 
         res.status(200).json({ total, completedToday, overdue });
     } catch (error) {
@@ -279,30 +167,28 @@ export const getDashboardStats = (req, res) => {
     }
 };
 
-export const getWeeklyStats = (req, res) => {
-    const userId = req.user.id;
+export const getWeeklyStats = async (req, res) => {
+    const userId = req.user.id.toString();
+    
     try {
-        const stmt = db.prepare(`
-            WITH RECURSIVE dates(date) AS (
-                SELECT date('now', '-6 days')
-                UNION ALL
-                SELECT date(date, '+1 day')
-                FROM dates
-                WHERE date < date('now')
-            )
-            SELECT 
-                dates.date,
-                COUNT(tasks.id) as completed
-            FROM dates
-            LEFT JOIN tasks 
-                ON date(tasks.created_at) = dates.date 
-                AND tasks.user_id = ? 
-                AND tasks.status = 'completed'
-            GROUP BY dates.date
-            ORDER BY dates.date ASC
-        `);
+        const last7Days = [...Array(7)].map((_, i) => {
+            const d = new Date();
+            d.setDate(d.getDate() - i);
+            return d.toISOString().split('T')[0];
+        }).reverse();
+
+        const tasksRef = db.collection('tasks')
+            .where('user_id', '==', userId)
+            .where('status', '==', 'completed');
         
-        const stats = stmt.all(userId);
+        const snapshot = await tasksRef.get();
+        const tasks = snapshot.docs.map(doc => doc.data());
+
+        const stats = last7Days.map(date => ({
+            date,
+            completed: tasks.filter(t => t.created_at && t.created_at.startsWith(date)).length
+        }));
+
         res.status(200).json(stats);
     } catch (error) {
         res.status(500).json({ error: 'Erro ao buscar estatísticas semanais', details: error.message });

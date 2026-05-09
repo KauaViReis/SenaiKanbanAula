@@ -1,45 +1,77 @@
-import db from '../db/index.js';
+import { db } from '../config/firebaseAdmin.js';
 
-export const getCategories = (req, res) => {
-    const userId = req.user.id;
+export const getCategories = async (req, res) => {
+    const userId = req.user.id.toString();
+
     try {
-        const stmt = db.prepare('SELECT * FROM categories WHERE user_id = ?');
-        const categories = stmt.all(userId);
+        const snapshot = await db.collection('categories')
+            .where('user_id', '==', userId)
+            .get();
+        
+        const categories = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
         res.status(200).json(categories);
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao buscar categorias' });
+        res.status(500).json({ error: 'Erro ao buscar categorias', details: error.message });
     }
 };
 
-export const createCategory = (req, res) => {
-    const userId = req.user.id;
+export const createCategory = async (req, res) => {
+    const userId = req.user.id.toString();
     const { name, color } = req.body;
-    
-    if (!name) return res.status(400).json({ error: 'Nome é obrigatório' });
+
+    if (!name) {
+        return res.status(400).json({ error: 'O nome da categoria é obrigatório' });
+    }
 
     try {
-        const stmt = db.prepare('INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)');
-        const result = stmt.run(userId, name, color || '#808080');
-        res.status(201).json({ id: result.lastInsertRowid, name, color });
+        const newCategory = {
+            user_id: userId,
+            name,
+            color: color || '#808080'
+        };
+
+        const docRef = await db.collection('categories').add(newCategory);
+
+        res.status(201).json({ 
+            id: docRef.id,
+            ...newCategory 
+        });
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao criar categoria' });
+        res.status(500).json({ error: 'Erro ao criar categoria', details: error.message });
     }
 };
 
-export const deleteCategory = (req, res) => {
-    const { id } = req.params;
-    const userId = req.user.id;
+export const deleteCategory = async (req, res) => {
+    const userId = req.user.id.toString();
+    const categoryId = req.params.id;
 
     try {
-        const stmt = db.prepare('DELETE FROM categories WHERE id = ? AND user_id = ?');
-        const result = stmt.run(id, userId);
+        const catRef = db.collection('categories').doc(categoryId);
+        const doc = await catRef.get();
 
-        if (result.changes === 0) {
+        if (!doc.exists || doc.data().user_id !== userId) {
             return res.status(404).json({ error: 'Categoria não encontrada' });
         }
 
-        res.status(200).json({ message: 'Categoria excluída' });
+        // Remover categoria das tarefas associadas
+        const tasksSnapshot = await db.collection('tasks')
+            .where('category_id', '==', categoryId)
+            .get();
+        
+        const batch = db.batch();
+        tasksSnapshot.docs.forEach(taskDoc => {
+            batch.update(taskDoc.ref, { category_id: null });
+        });
+        
+        batch.delete(catRef);
+        await batch.commit();
+
+        res.status(200).json({ message: 'Categoria excluída com sucesso' });
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao excluir categoria' });
+        res.status(500).json({ error: 'Erro ao excluir categoria', details: error.message });
     }
 };

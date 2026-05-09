@@ -1,6 +1,6 @@
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import db from '../db/index.js';
+import { db } from '../config/firebaseAdmin.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'secret_key_super_segura';
 
@@ -12,35 +12,54 @@ export const register = async (req, res) => {
     }
 
     try {
+        // Verificar se usuário já existe
+        const userSnapshot = await db.collection('users').where('email', '==', email).get();
+        if (!userSnapshot.empty) {
+            return res.status(400).json({ error: 'Email já está em uso' });
+        }
+
         const hashedPassword = await bcrypt.hash(password, 10);
         
-        // Execute registration in a transaction
-        const insertUser = db.prepare('INSERT INTO users (name, email, password) VALUES (?, ?, ?)');
-        const insertCategory = db.prepare('INSERT INTO categories (user_id, name, color) VALUES (?, ?, ?)');
-        
-        const performRegistration = db.transaction(() => {
-            const result = insertUser.run(name, email, hashedPassword);
-            const userId = result.lastInsertRowid;
-            
-            // Insert default categories
-            insertCategory.run(userId, 'trabalho', '#3b82f6'); // blue
-            insertCategory.run(userId, 'pessoal', '#10b981');  // green
-            insertCategory.run(userId, 'estudos', '#8b5cf6');  // purple
-            insertCategory.run(userId, 'casa', '#f59e0b');     // amber
-            
-            return userId;
+        // Criar usuário no Firestore
+        const newUserRef = db.collection('users').doc();
+        const userId = newUserRef.id;
+
+        const userData = {
+            id: userId,
+            name,
+            email,
+            password: hashedPassword,
+            created_at: new Date().toISOString(),
+            avatar: null
+        };
+
+        const batch = db.batch();
+        batch.set(newUserRef, userData);
+
+        // Inserir categorias padrão
+        const categories = [
+            { name: 'trabalho', color: '#3b82f6' },
+            { name: 'pessoal', color: '#10b981' },
+            { name: 'estudos', color: '#8b5cf6' },
+            { name: 'casa', color: '#f59e0b' }
+        ];
+
+        categories.forEach(cat => {
+            const catRef = db.collection('categories').doc();
+            batch.set(catRef, {
+                user_id: userId,
+                name: cat.name,
+                color: cat.color
+            });
         });
 
-        const newUserId = performRegistration();
+        await batch.commit();
 
         res.status(201).json({ 
             message: 'Usuário registrado com sucesso',
-            userId: newUserId 
+            userId: userId 
         });
     } catch (error) {
-        if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
-            return res.status(400).json({ error: 'Email já está em uso' });
-        }
         res.status(500).json({ error: 'Erro interno do servidor', details: error.message });
     }
 };
@@ -53,12 +72,14 @@ export const login = async (req, res) => {
     }
 
     try {
-        const stmt = db.prepare('SELECT * FROM users WHERE email = ?');
-        const user = stmt.get(email);
+        const userSnapshot = await db.collection('users').where('email', '==', email).limit(1).get();
 
-        if (!user) {
+        if (userSnapshot.empty) {
             return res.status(404).json({ error: 'Usuário não encontrado' });
         }
+
+        const userDoc = userSnapshot.docs[0];
+        const user = userDoc.data();
 
         const isValidPassword = await bcrypt.compare(password, user.password);
 
@@ -66,31 +87,36 @@ export const login = async (req, res) => {
             return res.status(401).json({ error: 'Credenciais inválidas' });
         }
 
-        const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+        const token = jwt.sign({ id: userDoc.id, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
 
         res.status(200).json({ 
             message: 'Login bem-sucedido', 
             token,
-            user: { id: user.id, name: user.name, email: user.email, avatar: user.avatar }
+            user: { id: userDoc.id, name: user.name, email: user.email, avatar: user.avatar }
         });
     } catch (error) {
-        res.status(500).json({ error: 'Erro no login' });
+        res.status(500).json({ error: 'Erro no login', details: error.message });
     }
 };
 
-export const updateProfile = (req, res) => {
-    const userId = req.user.id;
+export const updateProfile = async (req, res) => {
+    const userId = req.user.id.toString();
     const { avatar } = req.body;
     
     try {
-        const stmt = db.prepare('UPDATE users SET avatar = ? WHERE id = ?');
-        stmt.run(avatar, userId);
+        const userRef = db.collection('users').doc(userId);
+        await userRef.update({ avatar });
         
-        const userStmt = db.prepare('SELECT id, name, email, avatar FROM users WHERE id = ?');
-        const user = userStmt.get(userId);
+        const doc = await userRef.get();
+        const user = doc.data();
         
-        res.status(200).json(user);
+        res.status(200).json({
+            id: doc.id,
+            name: user.name,
+            email: user.email,
+            avatar: user.avatar
+        });
     } catch (error) {
-        res.status(500).json({ error: 'Erro ao atualizar perfil' });
+        res.status(500).json({ error: 'Erro ao atualizar perfil', details: error.message });
     }
 };
